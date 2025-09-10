@@ -1,0 +1,201 @@
+openapi: 3.0.1
+info:
+  title: ETH/USDT Research API (Route A)
+  version: "0.1.0"
+servers:
+  - url: http://127.0.0.1:8787
+paths:
+  /signals/backtest:
+    post:
+      operationId: backtest
+      summary: Run backtest for a strategy (EMA crossover, long-only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BacktestRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BacktestResponse'
+  /signals/live:
+    post:
+      operationId: liveSignal
+      summary: Get live trading signal for current market (EMA-based)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LiveSignalRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LiveSignalResponse'
+  /advise:
+    post:
+      operationId: advise
+      summary: Generate an advice based on live signal, risk, and horizon
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdviseRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdviseResponse'
+  /memory/upsert:
+    post:
+      operationId: memoryUpsert
+      summary: Upsert a memory key/value for a user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MemoryUpsertRequest'
+      responses:
+        '200':
+          description: OK
+  /memory/query:
+    get:
+      operationId: memoryQuery
+      summary: Query a memory by user and key
+      parameters:
+        - in: query
+          name: user_id
+          schema:
+            type: string
+        - in: query
+          name: key
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemoryQueryResponse'
+components:
+  schemas:
+    BacktestParams:
+      type: object
+      properties:
+        fast:
+          type: integer
+          default: 12
+        slow:
+          type: integer
+          default: 26
+        fee:
+          type: number
+          format: float
+          default: 0.001
+    BacktestRequest:
+      type: object
+      properties:
+        symbol:
+          type: string
+          default: ETH/USDT
+        exchange:
+          type: string
+          default: binance
+        timeframe:
+          type: string
+          default: 1h
+        start:
+          type: string
+          nullable: true
+        end:
+          type: string
+          nullable: true
+        params:
+          $ref: '#/components/schemas/BacktestParams'
+    BacktestMetrics:
+      type: object
+      properties:
+        total_return: {type: number, format: float}
+        cagr: {type: number, format: float}
+        sharpe: {type: number, format: float}
+        mdd: {type: number, format: float}
+        trades: {type: integer}
+        win_rate: {type: number, format: float}
+    BacktestResponse:
+      type: object
+      properties:
+        metrics:
+          $ref: '#/components/schemas/BacktestMetrics'
+        equity_curve:
+          type: array
+          items: {type: number, format: float}
+        signals:
+          type: array
+          items: {type: integer}
+    LiveSignalRequest:
+      type: object
+      properties:
+        symbol: {type: string, default: ETH/USDT}
+        exchange: {type: string, default: binance}
+        timeframe: {type: string, default: 1h}
+        lookback_bars: {type: integer, default: 400}
+        params:
+          $ref: '#/components/schemas/BacktestParams'
+    LiveSignalResponse:
+      type: object
+      properties:
+        action: {type: string}
+        confidence: {type: number, format: float}
+        evidence:
+          type: object
+          additionalProperties: true
+    AdviseRequest:
+      type: object
+      properties:
+        user_id: {type: string, default: default_user}
+        goal: {type: string, default: swing}
+        risk_level: {type: string, default: medium}
+        horizon_days: {type: integer, default: 7}
+        capital: {type: number, format: float, nullable: true}
+        symbol: {type: string, default: ETH/USDT}
+        exchange: {type: string, default: binance}
+        timeframe: {type: string, default: 1h}
+    AdviseResponse:
+      type: object
+      properties:
+        summary: {type: string}
+        action: {type: string}
+        confidence: {type: number, format: float}
+        evidence:
+          type: object
+          additionalProperties: true
+        risk_disclaimer: {type: string}
+    MemoryUpsertRequest:
+      type: object
+      properties:
+        user_id: {type: string}
+        key: {type: string}
+        value:
+          type: object
+          additionalProperties: true
+    MemoryQueryResponse:
+      type: object
+      properties:
+        user_id: {type: string}
+        key: {type: string}
+        value:
+          type: object
+          nullable: true
+          additionalProperties: true

@@ -1,0 +1,10 @@
+fastapi==0.115.0
+uvicorn==0.30.6
+pydantic==2.9.2
+pydantic-settings==2.4.0
+python-dotenv==1.0.1
+SQLAlchemy==2.0.36
+ccxt==4.4.47
+pandas==2.2.2
+numpy==1.26.4
+scipy==1.11.4
