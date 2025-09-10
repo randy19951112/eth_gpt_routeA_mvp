@@ -13,5 +13,6 @@ ENV PYTHONPATH=/app
 ENV TZ=Asia/Taipei
 
 EXPOSE 8787
-CMD ["sh","-c","python -m uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8787}"]
+CMD ["python","-c","import os,uvicorn; uvicorn.run('app.main:app', host='0.0.0.0', port=int(os.getenv('PORT','8787')))"]
+
 
