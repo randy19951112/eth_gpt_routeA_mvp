@@ -4,6 +4,18 @@ from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 from .config import settings
 import json
+# app/memory.py（片段）
+from sqlalchemy import create_engine
+from .config import settings
+
+is_sqlite = settings.db_url.startswith("sqlite")
+engine = create_engine(
+    settings.db_url,
+    echo=False,
+    future=True,
+    connect_args={"check_same_thread": False} if is_sqlite else {},
+)
+
 
 Base = declarative_base()
 
