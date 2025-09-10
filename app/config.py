@@ -1,18 +1,13 @@
-from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import Field
+# app/config.py
+from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
-    # 讀 .env，大小寫不敏感
-    model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
-        case_sensitive=False
-    )
+    # 全部給預設值，沒 .env 也能跑
+    exchange: str = "binance"
+    cors_origins: list[str] = ["*"]
 
-    # 對應到 .env 的變數
-    exchange: str = Field(default="binance", alias="EXCHANGE")
-    default_symbol: str = Field(default="ETH/USDT", alias="DEFAULT_SYMBOL")
-    default_timeframe: str = Field(default="1h", alias="DEFAULT_TIMEFRAME")
-    db_url: str = Field(default="sqlite:///./eth_agent.db", alias="DB_URL")
+    class Config:
+        env_prefix = ""
+        case_sensitive = False
 
 settings = Settings()
