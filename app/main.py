@@ -539,16 +539,20 @@ async def full_analysis(symbol: str = "ETH/USDT", timeframe: str = "5m", limit: 
 
     # 計算技術指標
     macd_ind = ta.trend.MACD(pd.Series(close_prices))
-macd = macd_ind.macd().values
-macdsignal = macd_ind.macd_signal().values
-macdhist = macd_ind.macd_diff().values
-    stoch = ta.momentum.StochasticOscillator(pd.Series(np_ohlcv[:, 2]), pd.Series(np_ohlcv[:, 3]), pd.Series(close_prices))
-slowk = stoch.stoch().values
-slowd = stoch.stoch_signal().values
+    macd = macd_ind.macd().values
+    macdsignal = macd_ind.macd_signal().values
+    macdhist = macd_ind.macd_diff().values
+    stoch = ta.momentum.StochasticOscillator(
+    pd.Series(np_ohlcv[:, 2]),
+    pd.Series(np_ohlcv[:, 3]),
+    pd.Series(close_prices)
+)
+    slowk = stoch.stoch().values
+    slowd = stoch.stoch_signal().values
     boll = ta.volatility.BollingerBands(pd.Series(close_prices), window=20, window_dev=2)
-upperband = boll.bollinger_hband().values
-middleband = boll.bollinger_mavg().values
-lowerband = boll.bollinger_lband().values
+    upperband = boll.bollinger_hband().values
+    middleband = boll.bollinger_mavg().values
+    lowerband = boll.bollinger_lband().values
     ma = pd.Series(close_prices).rolling(window=20).mean().values
 
     return {
