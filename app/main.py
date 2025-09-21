@@ -27,6 +27,11 @@ from .knowledge import upsert_knowledge, search_knowledge
 from .uploader import extract_text_by_ext, chunk_text, fetch_bytes_from_url, ocr_image_bytes, ocr_pdf_bytes
 from .logs import save_log, list_recent_logs, evaluate_one, compute_review_stats
 from .config import settings
+import ccxt
+import talib
+import numpy as np
+
+exchange = ccxt.binance({"enableRateLimit": True})
 
 
 # =========================
