@@ -523,46 +523,42 @@ def review_summary(req: ReviewSummaryRequest):
     return ReviewSummaryResponse(stats=ReviewStats(**stats_dict))
 @app.get("/signals/full_analysis")
 async def full_analysis(symbol: str = "ETH/USDT", timeframe: str = "5m", limit: int = 200):
-# 抓即時成交價 (Last Price)
-ticker = exchange.fetch_ticker(symbol)
-last_price = ticker["last"]
+    # 抓即時成交價 (Last Price)
+    ticker = exchange.fetch_ticker(symbol)
+    last_price = ticker["last"]
 
+    # 抓 K 線資料 (OHLCV)
+    ohlcv = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
+    np_ohlcv = np.array(ohlcv)
+    close_prices = np_ohlcv[:, 4]  # 收盤價
 
-# 抓 K 線資料 (OHLCV)
-ohlcv = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
-np_ohlcv = np.array(ohlcv)
-close_prices = np_ohlcv[:, 4] # 收盤價
+    # 計算技術指標
+    macd, macdsignal, macdhist = talib.MACD(close_prices, fastperiod=12, slowperiod=26, signalperiod=9)
+    slowk, slowd = talib.STOCH(np_ohlcv[:, 2], np_ohlcv[:, 3], close_prices)
+    upperband, middleband, lowerband = talib.BBANDS(close_prices, timeperiod=20)
+    ma = talib.SMA(close_prices, timeperiod=20)
 
-
-# 計算技術指標
-macd, macdsignal, macdhist = talib.MACD(close_prices, fastperiod=12, slowperiod=26, signalperiod=9)
-slowk, slowd = talib.STOCH(np_ohlcv[:, 2], np_ohlcv[:, 3], close_prices)
-upperband, middleband, lowerband = talib.BBANDS(close_prices, timeperiod=20)
-ma = talib.SMA(close_prices, timeperiod=20)
-
-
-return {
-"symbol": symbol,
-"timeframe": timeframe,
-"last_price": float(last_price),
-"indicators": {
-"MACD": {
-"macd": float(macd[-1]),
-"signal": float(macdsignal[-1]),
-"hist": float(macdhist[-1])
-},
-"KDJ": {
-"K": float(slowk[-1]),
-"D": float(slowd[-1]),
-"J": float(3 * slowk[-1] - 2 * slowd[-1])
-},
-"BOLL": {
-"upper": float(upperband[-1]),
-"middle": float(middleband[-1]),
-"lower": float(lowerband[-1])
-},
-"MA": float(ma[-1])
-},
-"ohlcv": ohlcv[-5:] # 回傳最近 5 根 K 線供檢查
-}
-
+    return {
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "last_price": float(last_price),
+        "indicators": {
+            "MACD": {
+                "macd": float(macd[-1]),
+                "signal": float(macdsignal[-1]),
+                "hist": float(macdhist[-1])
+            },
+            "KDJ": {
+                "K": float(slowk[-1]),
+                "D": float(slowd[-1]),
+                "J": float(3 * slowk[-1] - 2 * slowd[-1])
+            },
+            "BOLL": {
+                "upper": float(upperband[-1]),
+                "middle": float(middleband[-1]),
+                "lower": float(lowerband[-1])
+            },
+            "MA": float(ma[-1])
+        },
+        "ohlcv": ohlcv[-5:]  # 回傳最近 5 根 K 線供檢查
+    }
