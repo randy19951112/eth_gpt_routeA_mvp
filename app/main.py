@@ -1,4 +1,4 @@
-# app/main.py — 完整可用版本（沿用既有模組）
+## app/main.py — 完整可用版本（沿用既有模組）
 from __future__ import annotations
 
 from typing import Optional, List, Dict, Any
@@ -28,7 +28,7 @@ from .uploader import extract_text_by_ext, chunk_text, fetch_bytes_from_url, ocr
 from .logs import save_log, list_recent_logs, evaluate_one, compute_review_stats
 from .config import settings
 import ccxt
-import talib
+import ta  # replaced talib with ta
 import numpy as np
 
 exchange = ccxt.binance({"enableRateLimit": True})
@@ -538,10 +538,18 @@ async def full_analysis(symbol: str = "ETH/USDT", timeframe: str = "5m", limit: 
     close_prices = np_ohlcv[:, 4]  # 收盤價
 
     # 計算技術指標
-    macd, macdsignal, macdhist = talib.MACD(close_prices, fastperiod=12, slowperiod=26, signalperiod=9)
-    slowk, slowd = talib.STOCH(np_ohlcv[:, 2], np_ohlcv[:, 3], close_prices)
-    upperband, middleband, lowerband = talib.BBANDS(close_prices, timeperiod=20)
-    ma = talib.SMA(close_prices, timeperiod=20)
+    macd_ind = ta.trend.MACD(pd.Series(close_prices))
+macd = macd_ind.macd().values
+macdsignal = macd_ind.macd_signal().values
+macdhist = macd_ind.macd_diff().values
+    stoch = ta.momentum.StochasticOscillator(pd.Series(np_ohlcv[:, 2]), pd.Series(np_ohlcv[:, 3]), pd.Series(close_prices))
+slowk = stoch.stoch().values
+slowd = stoch.stoch_signal().values
+    boll = ta.volatility.BollingerBands(pd.Series(close_prices), window=20, window_dev=2)
+upperband = boll.bollinger_hband().values
+middleband = boll.bollinger_mavg().values
+lowerband = boll.bollinger_lband().values
+    ma = pd.Series(close_prices).rolling(window=20).mean().values
 
     return {
         "symbol": symbol,
