@@ -1,6 +1,11 @@
 fastapi
 uvicorn
 ccxt
-ta
 pandas
 numpy
+ta
+pdfplumber
+pytesseract
+Pillow
+
+
