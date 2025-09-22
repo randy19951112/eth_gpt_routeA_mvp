@@ -935,6 +935,5 @@ post_knowledge_upsert_knowledge_upsert_post({
     "content": report,
     "tags": ["analysis", symbol, "auto-log"]
 })
-
     return {"symbol": symbol, "report": report_text}
 
