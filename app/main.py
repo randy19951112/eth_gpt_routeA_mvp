@@ -678,3 +678,281 @@ def full_analysis_multi(symbol: str = "ETH/USDT"):
         }
 
     return {"symbol": symbol, "analysis": output}
+
+@app.get("/analysis/report")
+def analysis_report(symbol: str = "ETH/USDT"):
+    timeframes = ["5m", "15m", "30m", "1h", "4h", "1d"]
+    output = {}
+
+    # 安全擷取 ticker
+    try:
+        ticker = exchange.fetch_ticker(symbol) or {}
+        last_price = float(ticker.get("last")) if ticker.get("last") is not None else None
+        high_24h  = ticker.get("high")
+        low_24h   = ticker.get("low")
+    except Exception:
+        last_price = None
+        high_24h = None
+        low_24h = None
+
+    # 蒐集各 timeframe
+    for tf in timeframes:
+        df = fetch_ohlcv(symbol, timeframe=tf, limit=200)
+        if df.empty:
+            output[tf] = {"error": "no data"}
+            continue
+
+        indicators = calculate_indicators(df)
+        last_row = df.iloc[-1]
+        output[tf] = {
+            "last_candle": {
+                "time": str(last_row["timestamp"]),
+                "open": float(last_row["open"]),
+                "high": float(last_row["high"]),
+                "low": float(last_row["low"]),
+                "close": float(last_row["close"]),
+                "volume": float(last_row["volume"]),
+            },
+            "indicators": indicators,
+        }
+
+    # 安全取值避免 KeyError
+    def _macd_ok(tf):
+        return (tf in output) and isinstance(output[tf], dict) and ("indicators" in output[tf])
+
+    short_view = "資料不足"
+    if _macd_ok("15m"):
+        short_view = "偏強" if output["15m"]["indicators"]["MACD"]["DIF"] > output["15m"]["indicators"]["MACD"]["DEA"] else "偏弱"
+
+    mid_view = "資料不足"
+    if _macd_ok("1h"):
+        mid_view = "震盪偏多" if output["1h"]["indicators"]["MACD"]["DIF"] > 0 else "震盪偏空"
+
+    long_view = "資料不足"
+    if _macd_ok("1d"):
+        long_view = "多頭" if output["1d"]["indicators"]["MACD"]["DIF"] > output["1d"]["indicators"]["MACD"]["DEA"] else "需防回調"
+
+    # 若 last_price 無法取得，避免格式化失敗
+    lp = last_price if last_price is not None else 0.0
+    hi = f"{high_24h}" if high_24h is not None else "N/A"
+    lo = f"{low_24h}"  if low_24h  is not None else "N/A"
+
+    report = f"""
+📊 {symbol} 多週期技術分析報告
+
+📌 即時快照
+- 現價：{lp:.2f} USDT
+- 近 24h 高低：{hi} / {lo}
+
+🔎 多週期總結
+- 短線 (5m–15m)：{short_view}
+- 中線 (30m–4h)：{mid_view}
+- 長線 (1d)：{long_view}
+
+📌 關鍵區間
+- 上方壓力：暫定 {lp * 1.01:.2f}
+- 下方支撐：暫定 {lp * 0.99:.2f}
+
+📈 操作建議
+- 若回踩支撐不破，可試多，止損 {lp * 0.985:.2f}，目標 {lp * 1.01:.2f}
+- 若失守支撐，順勢短空，止損 {lp * 1.005:.2f}，目標 {lp * 0.97:.2f}
+    """
+
+    return {"symbol": symbol, "report": report, "analysis": output}
+
+
+# === 支撐/壓力 + 建議：Pydantic Schema ===
+class SRAdviceRequest(BaseModel):
+    symbol: str = "ETH/USDT"
+    timeframe: str = "1h"
+    lookback_bars: conint(ge=50, le=2000) = 300
+    risk_level: str = Field("medium", description="one of: low / medium / high")
+
+
+class SRLevel(BaseModel):
+    support: Optional[float] = None
+    resistance: Optional[float] = None
+    method: str
+
+
+class SRAdvice(BaseModel):
+    action: str                 # BUY / SELL / HOLD
+    confidence: float           # 0.0 ~ 1.0
+    rationale: List[str]        # 判斷依據的條列
+    suggested_entry: Optional[float] = None
+    suggested_stop: Optional[float] = None
+    suggested_take: Optional[float] = None
+    position_pct: Optional[float] = None  # 依風險等級建議倉位百分比（現貨/合約自行詮釋）
+
+
+class SRAdviceResponse(BaseModel):
+    symbol: str
+    timeframe: str
+    last_price: Optional[float]
+    levels: List[SRLevel]
+    advice: SRAdvice
+
+
+# === 小工具：找近端 swing 高低 + 參考布林 ===
+def _swing_levels(df: pd.DataFrame, left: int = 3, right: int = 3) -> Dict[str, Optional[float]]:
+    """
+    用簡單 pivot 檢測找最近一個 swing high / swing low。
+    left/right 表 pivot 左右需要更高(或更低)的根數。
+    """
+    highs = df["high"].values
+    lows = df["low"].values
+    last_high = None
+    last_low = None
+    for i in range(len(df) - right - 1, left - 1, -1):
+        # swing high
+        if all(highs[i] > highs[i - k] for k in range(1, left + 1)) and \
+           all(highs[i] > highs[i + k] for k in range(1, right + 1)):
+            last_high = float(highs[i])
+            break
+    for i in range(len(df) - right - 1, left - 1, -1):
+        # swing low
+        if all(lows[i] < lows[i - k] for k in range(1, left + 1)) and \
+           all(lows[i] < lows[i + k] for k in range(1, right + 1)):
+            last_low = float(lows[i])
+            break
+    return {"swing_high": last_high, "swing_low": last_low}
+
+
+def _risk_params(risk_level: str) -> Dict[str, float]:
+    # 風險等級 → 停損% / 目標% / 倉位%
+    risk_level = (risk_level or "medium").lower()
+    if risk_level == "low":
+        return {"sl_pct": 0.0075, "tp_pct": 0.012, "pos_pct": 0.25}
+    if risk_level == "high":
+        return {"sl_pct": 0.015, "tp_pct": 0.03, "pos_pct": 0.75}
+    # default medium
+    return {"sl_pct": 0.01, "tp_pct": 0.02, "pos_pct": 0.5}
+
+
+@app.post("/analysis/sr_advice", response_model=SRAdviceResponse, summary="自動判斷支撐/壓力並給出建議")
+def sr_advice(req: SRAdviceRequest):
+    symbol = req.symbol
+    tf = req.timeframe
+    limit = int(req.lookback_bars)
+
+    # 取價
+    try:
+        ticker = exchange.fetch_ticker(symbol) or {}
+        last_price = float(ticker.get("last")) if ticker.get("last") is not None else None
+    except Exception:
+        last_price = None
+
+    # 取 K 線
+    df = fetch_ohlcv(symbol, timeframe=tf, limit=limit)
+    if df.empty:
+        return SRAdviceResponse(
+            symbol=symbol, timeframe=tf, last_price=last_price,
+            levels=[SRLevel(support=None, resistance=None, method="insufficient_data")],
+            advice=SRAdvice(action="HOLD", confidence=0.0, rationale=["no ohlcv data"])
+        )
+
+    # 指標
+    ind = calculate_indicators(df)
+    macd = ind["MACD"]
+    boll = ind["BOLL"]
+    ma5 = ind["MA"]["MA5"]
+    ma20 = ind["MA"]["MA20"]
+
+    # 近端 swing 高低
+    piv = _swing_levels(df, left=3, right=3)
+
+    # 整理多組候選支撐/壓力
+    levels: List[SRLevel] = []
+    # 1) 近端 swing
+    if piv["swing_low"] is not None or piv["swing_high"] is not None:
+        levels.append(SRLevel(support=piv["swing_low"], resistance=piv["swing_high"], method="swing_pivot"))
+    # 2) 布林帶
+    levels.append(SRLevel(support=float(boll["lower"]), resistance=float(boll["upper"]), method="bollinger_band"))
+    # 3) 均線（以 MA20 視為區間中軸，給出輔助 S/R）
+    if ma20 is not None:
+        levels.append(SRLevel(support=float(ma20 * 0.995), resistance=float(ma20 * 1.005), method="ma20_zone"))
+
+    # ——— 規則引擎（簡易可讀） ———
+    rationale: List[str] = []
+    score = 0  # 用來換算 confidence
+
+    # A. 趨勢傾向（MACD、均線）
+    if macd["DIF"] > macd["DEA"]:
+        score += 1; rationale.append("MACD DIF>DEA → 偏多")
+    else:
+        rationale.append("MACD DIF<=DEA → 偏空/中性")
+
+    if ma5 and ma20:
+        if ma5 > ma20:
+            score += 1; rationale.append("MA5>MA20 → 短多")
+        else:
+            rationale.append("MA5<=MA20 → 短空/中性")
+
+    # B. 價格相對 S/R 的位置
+    ref_supports = [lv.support for lv in levels if lv.support is not None]
+    ref_resists  = [lv.resistance for lv in levels if lv.resistance is not None]
+
+    near_s = near_r = False
+    if last_price is not None:
+        # 距離最近支撐/壓力（%）
+        if ref_supports:
+            dist_s = min(abs(last_price - s) / last_price for s in ref_supports)
+            if dist_s <= 0.005:  # 0.5% 內視為「貼近支撐」
+                near_s = True; score += 1; rationale.append("價格接近支撐（≤0.5%）")
+        if ref_resists:
+            dist_r = min(abs(last_price - r) / last_price for r in ref_resists)
+            if dist_r <= 0.005:  # 0.5% 內視為「貼近壓力」
+                near_r = True; score -= 1; rationale.append("價格接近壓力（≤0.5%）")
+
+    # C. 布林中軌相對
+    mid = float(boll["middle"])
+    if last_price is not None:
+        if last_price >= mid:
+            score += 0.5; rationale.append("站上布林中軌")
+        else:
+            rationale.append("位於布林中軌下方")
+
+    # ——— 產出動作與價位 ———
+    rp = _risk_params(req.risk_level)
+    action = "HOLD"
+    suggested_entry = suggested_stop = suggested_take = None
+
+    if last_price is not None:
+        # 偏多且靠近支撐 → BUY
+        if score >= 2 and near_s:
+            action = "BUY"
+            suggested_entry = last_price
+            suggested_stop = last_price * (1 - rp["sl_pct"])
+            suggested_take = last_price * (1 + rp["tp_pct"])
+        # 偏空且靠近壓力 → SELL（或視為避險/做空信號）
+        elif score <= -1 and near_r:
+            action = "SELL"
+            suggested_entry = last_price
+            suggested_stop = last_price * (1 + rp["sl_pct"])
+            suggested_take = last_price * (1 - rp["tp_pct"])
+        else:
+            # 沒有好位置，維持 HOLD；但若明顯偏多/偏空，給出等待提示
+            if score >= 2: rationale.append("傾向偏多，但當前不在理想進場區，等待回踩支撐")
+            if score <= -1: rationale.append("傾向偏空，但當前不在理想進場區，等待反彈至壓力")
+
+    # ——— 信心換算：把 score 映到 0~1 ———
+    # 最高假設 ~3 分，最低 ~-2 分，截斷後線性映射
+    raw = max(min(score, 3.0), -2.0)
+    confidence = (raw + 2.0) / 5.0  # -2→0.0, 3→1.0
+
+    return SRAdviceResponse(
+        symbol=symbol,
+        timeframe=tf,
+        last_price=last_price,
+        levels=levels,
+        advice=SRAdvice(
+            action=action,
+            confidence=float(round(confidence, 3)),
+            rationale=rationale,
+            suggested_entry=suggested_entry,
+            suggested_stop=suggested_stop,
+            suggested_take=suggested_take,
+            position_pct=rp["pos_pct"]
+        )
+    )
+
