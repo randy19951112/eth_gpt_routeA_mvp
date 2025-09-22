@@ -4,8 +4,4 @@ ccxt
 pandas
 numpy
 ta
-pdfplumber
-pytesseract
-Pillow
-
 
