@@ -30,8 +30,73 @@ from .config import settings
 import ccxt
 import ta  # replaced talib with ta
 import numpy as np
+import pandas as pd
+
 
 exchange = ccxt.binance({"enableRateLimit": True})
+
+   
+# ================== [A] 取得 OHLCV 資料（含錯誤處理） ==================
+def fetch_ohlcv(symbol="ETH/USDT", timeframe="15m", limit=200):
+    try:
+        ohlcv = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
+    except Exception as e:
+        # 回傳空的 DataFrame；由呼叫端判斷 df.empty 來給友善錯誤訊息
+        return pd.DataFrame()
+
+    if not ohlcv:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(
+        ohlcv,
+        columns=["timestamp", "open", "high", "low", "close", "volume"]
+    )
+    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+    return df
+
+# ================== [B] 計算技術指標（沿用你的寫法） ==================
+def calculate_indicators(df: pd.DataFrame):
+    result = {}
+
+    # === KDJ (以 Stochastic 近似) ===
+    stoch = ta.momentum.StochasticOscillator(
+        high=df["high"], low=df["low"], close=df["close"], window=14, smooth_window=3
+    )
+    result["KDJ"] = {
+        "K": float(stoch.stoch().iloc[-1]),
+        "D": float(stoch.stoch_signal().iloc[-1]),
+        "J": float(3 * stoch.stoch().iloc[-1] - 2 * stoch.stoch_signal().iloc[-1]),
+    }
+
+    # === MACD ===
+    macd = ta.trend.MACD(close=df["close"])
+    result["MACD"] = {
+        "DIF": float(macd.macd().iloc[-1]),
+        "DEA": float(macd.macd_signal().iloc[-1]),
+        "hist": float(macd.macd_diff().iloc[-1]),
+    }
+
+      # === 布林帶 (BOLL) ===
+    bb = ta.volatility.BollingerBands(close=df["close"], window=20, window_dev=2)
+    boll = {
+        "upper": float(bb.bollinger_hband().iloc[-1]),
+        "middle": float(bb.bollinger_mavg().iloc[-1]),
+        "lower": float(bb.bollinger_lband().iloc[-1]),
+    }
+    # 正式名稱
+    result["BOLL"] = boll
+    # 相容舊版（可用一段時間後移除）
+    result["BB"] = boll
+
+
+    # === 均線 (MA) ===
+    result["MA"] = {
+        "MA5": float(df["close"].rolling(5).mean().iloc[-1]),
+        "MA20": float(df["close"].rolling(20).mean().iloc[-1]),
+        "MA60": float(df["close"].rolling(60).mean().iloc[-1]) if len(df) >= 60 else None,
+    }
+
+    return result
 
 
 # =========================
@@ -526,56 +591,90 @@ def review_summary(req: ReviewSummaryRequest):
     ) or {}
     # 確保轉成定義好的 ReviewStats
     return ReviewSummaryResponse(stats=ReviewStats(**stats_dict))
+# ================== [B] 單一 timeframe 版（改為同步函式 + 保護） ==================
 @app.get("/signals/full_analysis")
-async def full_analysis(symbol: str = "ETH/USDT", timeframe: str = "5m", limit: int = 200):
-    # 抓即時成交價 (Last Price)
-    ticker = exchange.fetch_ticker(symbol)
-    last_price = ticker["last"]
+def full_analysis(symbol: str = "ETH/USDT", timeframe: str = "5m", limit: int = 200):
+    try:
+        # 即時價（可選；若出錯不影響後續）
+        try:
+            ticker = exchange.fetch_ticker(symbol)
+            last_price = float(ticker.get("last")) if ticker and ticker.get("last") is not None else None
+        except Exception:
+            last_price = None
 
-    # 抓 K 線資料 (OHLCV)
-    ohlcv = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
-    np_ohlcv = np.array(ohlcv)
-    close_prices = np_ohlcv[:, 4]  # 收盤價
+        # K 線資料
+        df = fetch_ohlcv(symbol=symbol, timeframe=timeframe, limit=limit)
+        if df.empty:
+            # 與 multi 版一致：遇到空資料時回傳清楚訊息
+            return {
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "error": "no ohlcv data",
+                "indicators": None,
+                "ohlcv": []
+            }
 
-    # 計算技術指標
-    macd_ind = ta.trend.MACD(pd.Series(close_prices))
-    macd = macd_ind.macd().values
-    macdsignal = macd_ind.macd_signal().values
-    macdhist = macd_ind.macd_diff().values
-    stoch = ta.momentum.StochasticOscillator(
-    pd.Series(np_ohlcv[:, 2]),
-    pd.Series(np_ohlcv[:, 3]),
-    pd.Series(close_prices)
-)
-    slowk = stoch.stoch().values
-    slowd = stoch.stoch_signal().values
-    boll = ta.volatility.BollingerBands(pd.Series(close_prices), window=20, window_dev=2)
-    upperband = boll.bollinger_hband().values
-    middleband = boll.bollinger_mavg().values
-    lowerband = boll.bollinger_lband().values
-    ma = pd.Series(close_prices).rolling(window=20).mean().values
+        # 指標計算（延用你已經定義好的 calculate_indicators）
+        indicators = calculate_indicators(df)
 
-    return {
-        "symbol": symbol,
-        "timeframe": timeframe,
-        "last_price": float(last_price),
-        "indicators": {
-            "MACD": {
-                "macd": float(macd[-1]),
-                "signal": float(macdsignal[-1]),
-                "hist": float(macdhist[-1])
+        # 只回最近 5 根 K 線作檢查（和你原檔行為一致）
+        ohlcv_tail = df.tail(5)[["timestamp", "open", "high", "low", "close", "volume"]]
+        ohlcv_list = [
+            [
+                int(ts.value // 10**6),  # 轉回毫秒時間戳（可與前端常見格式對齊）
+                float(o), float(h), float(l), float(c), float(v)
+            ]
+            for ts, o, h, l, c, v in ohlcv_tail.itertuples(index=False)
+        ]
+
+        return {
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "last_price": last_price,
+            "indicators": {
+                # 與 multi 版 key 命名風格一致
+                "MACD": indicators["MACD"],
+                "KDJ": indicators["KDJ"],
+                "BOLL": indicators["BOLL"],
+                "MA": indicators["MA"],
             },
-            "KDJ": {
-                "K": float(slowk[-1]),
-                "D": float(slowd[-1]),
-                "J": float(3 * slowk[-1] - 2 * slowd[-1])
+            "ohlcv": ohlcv_list
+        }
+
+    except Exception as e:
+        # 最外層保險：回傳清楚錯誤，不讓整個 API 500 掉
+        return {
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "error": f"{type(e).__name__}: {str(e)}"
+        }
+
+
+# ================== [C] 多時間框架版 ==================
+@app.get("/signals/full_analysis_multi")
+def full_analysis_multi(symbol: str = "ETH/USDT"):
+    timeframes = ["5m", "15m", "30m", "1h", "4h", "1d"]
+    output = {}
+
+    for tf in timeframes:
+        df = fetch_ohlcv(symbol, timeframe=tf, limit=200)
+        if df.empty:
+            output[tf] = {"error": "no data"}
+            continue
+
+        indicators = calculate_indicators(df)
+        last_row = df.iloc[-1]
+
+        output[tf] = {
+            "last_candle": {
+                "time": str(last_row["timestamp"]),
+                "open": float(last_row["open"]),
+                "high": float(last_row["high"]),
+                "low": float(last_row["low"]),
+                "close": float(last_row["close"]),
+                "volume": float(last_row["volume"]),
             },
-            "BOLL": {
-                "upper": float(upperband[-1]),
-                "middle": float(middleband[-1]),
-                "lower": float(lowerband[-1])
-            },
-            "MA": float(ma[-1])
-        },
-        "ohlcv": ohlcv[-5:]  # 回傳最近 5 根 K 線供檢查
-    }
+            "indicators": indicators,
+        }
+
+    return {"symbol": symbol, "analysis": output}
