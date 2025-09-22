@@ -884,12 +884,15 @@ def analysis_report(symbol: str = "ETH/USDT"):
     timeframes = ["5m", "15m", "30m", "1h", "4h", "1d"]
     report_lines = []
 
-    # === 即時快照 ===
+    # === 即時快照（保護：可能取不到 1m 資料） ===
     df_now = fetch_ohlcv(symbol, timeframe="1m", limit=1)
-    last_row = df_now.iloc[-1]
-    price = float(last_row["close"])
-    high = float(last_row["high"])
-    low = float(last_row["low"])
+    if df_now.empty:
+        return {"symbol": symbol, "error": "no 1m data"}
+
+    last_row_now = df_now.iloc[-1]
+    price = float(last_row_now["close"])
+    high = float(last_row_now["high"])
+    low = float(last_row_now["low"])
     middle = (high + low) / 2
 
     report_lines.append("📌 即時快照")
@@ -898,18 +901,26 @@ def analysis_report(symbol: str = "ETH/USDT"):
     report_lines.append(f"  • 中軌（估算）：{middle:.4f}")
     report_lines.append("⸻")
 
-    # === 多週期技術分析 ===
+    # === 多週期技術分析（保護：空 df 跳過） ===
     for tf in timeframes:
         df = fetch_ohlcv(symbol, timeframe=tf, limit=200)
+        if df.empty:
+            report_lines.append(f"🕐 {tf}")
+            report_lines.append("  • 資料不足")
+            report_lines.append("⸻")
+            continue
+
         indicators = calculate_indicators(df)
         last_row = df.iloc[-1]
+        ma60 = indicators['MA']['MA60']
+        ma60_str = f"{ma60:.4f}" if ma60 is not None else "資料不足"
 
         report_lines.append(f"🕐 {tf}")
         report_lines.append(f"  • 開盤：{last_row['open']:.4f}, 收盤：{last_row['close']:.4f}, 最高：{last_row['high']:.4f}, 最低：{last_row['low']:.4f}")
         report_lines.append(f"  • KDJ：K={indicators['KDJ']['K']:.2f}, D={indicators['KDJ']['D']:.2f}, J={indicators['KDJ']['J']:.2f}")
         report_lines.append(f"  • MACD：DIF={indicators['MACD']['DIF']:.6f}, DEA={indicators['MACD']['DEA']:.6f}, hist={indicators['MACD']['hist']:.6f}")
-        report_lines.append(f"  • BB：上軌={indicators['BB']['upper']:.4f}, 中軌={indicators['BB']['middle']:.4f}, 下軌={indicators['BB']['lower']:.4f}")
-        report_lines.append(f"  • 均線：MA5={indicators['MA']['MA5']:.4f}, MA20={indicators['MA']['MA20']:.4f}, MA60={indicators['MA']['MA60']}")
+        report_lines.append(f"  • BB：上軌={indicators['BOLL']['upper']:.4f}, 中軌={indicators['BOLL']['middle']:.4f}, 下軌={indicators['BOLL']['lower']:.4f}")
+        report_lines.append(f"  • 均線：MA5={indicators['MA']['MA5']:.4f}, MA20={indicators['MA']['MA20']:.4f}, MA60={ma60_str}")
         report_lines.append("⸻")
 
     # === 總結 & 操作建議 ===
@@ -918,22 +929,24 @@ def analysis_report(symbol: str = "ETH/USDT"):
     report_lines.append("  • 中線：30m 與 4h 若同步，方向較有參考性。")
     report_lines.append("  • 日線：關鍵趨勢，需防止假突破。")
     report_lines.append("⸻")
-    report_lines.append("📌 操作建議（勝率約 65%）")
+    report_lines.append("📌 操作建議（簡化示例）")
     report_lines.append("  • 建倉區間：靠近支撐位可輕倉嘗試。")
     report_lines.append("  • 止損：跌破主要支撐立即止損。")
     report_lines.append("  • 止盈：突破壓力位可逐步減倉。")
 
-    # === 輸出文字 ===
     report_text = "\n".join(report_lines)
 
-    # === 存入知識庫 (模擬：這裡你可改成寫 DB / API call) ===
-    from eth_gpt_routea_mvp_onrender_com__jit_plugin import post_knowledge_upsert_knowledge_upsert_post
+    # === 存入知識庫 (直接用 upsert_knowledge) ===
+    try:
+        upsert_knowledge(
+            user_id="default_user",
+            title=f"{symbol} 分析報告 {datetime.utcnow().isoformat()}Z",
+            content=report_text,
+            tags=["analysis", symbol, "auto-log"],
+            active=True
+        )
+    except Exception:
+        pass
 
-post_knowledge_upsert_knowledge_upsert_post({
-    "user_id": "default_user",
-    "title": f"{symbol} 分析報告 {datetime.utcnow()}",
-    "content": report,
-    "tags": ["analysis", symbol, "auto-log"]
-})
     return {"symbol": symbol, "report": report_text}
 
